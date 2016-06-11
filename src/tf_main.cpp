@@ -83,6 +83,7 @@ int main(int argc, char** argv) {
   u_config.process_storage_type = petuum::BoundedDense;
   petuum::PSTableGroup::CreateTable((int)Table::U, u_config);
 
+
   petuum::ClientTableConfig p_config;
   p_config.table_info.row_type = RowType::FLOAT;
   p_config.table_info.row_capacity = num_products;
@@ -119,7 +120,7 @@ int main(int argc, char** argv) {
   for (int i = 0; i < num_workers; i++) {
     threads[i] = std::thread(
         &mfals::Worker::run,
-        std::unique_ptr<mfals::Worker>(new mfals::Worker(
+        std::unique_ptr<tfals::Worker>(new tfals::Worker(
             i, "out", rank, iterations, eval_rounds, Table::U, Table::P, Table::T)));
   }
 

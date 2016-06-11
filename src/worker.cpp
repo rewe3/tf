@@ -8,7 +8,7 @@
 
 #include "matrix_data.h"
 
-namespace mfals {
+namespace tfals {
 
 Worker::Worker(int id, std::string basepath, int rank, int iterations,
                int evalrounds, int usertableid, int prodtableid, int wordstableid)
@@ -66,7 +66,7 @@ void Worker::run() {
   if (id == 0) {
     randomizetable(usertable, rank, Rwords.n_rows);
     randomizetable(prodtable, rank, Rwords.n_cols);
-    randomizetable(wordtable, Ruser.n_words, rank);
+    randomizetable(wordtable, rank, Ruser.n_words);
   }
 
   petuum::PSTableGroup::GlobalBarrier();
@@ -76,7 +76,7 @@ void Worker::run() {
   // Fetch U, P and T
   auto U = loadmat(usertable, Rwords.n_rows, rank);
   auto P = loadmat(prodtable, Rwords.n_cols, rank);
-  auto T = loadmat(wordtable, rank, Ruser.n_words);
+  auto T = loadmat(wordtable, rank, Ruser.n_words, true);
 
   LOG(INFO) << "Start optimization";
 
@@ -205,9 +205,9 @@ void Worker::run() {
 
     petuum::PSTableGroup::GlobalBarrier();
 
-    // Fetch updated P
-    U = loadmat(prodtable, U.n_rows, U.n_cols);
-    U = arma::clamp(U, 0.0, 5.0);
+    // Fetch updated T
+    T = loadmat(wordtable, T.n_rows, T.n_cols, true);
+    T = arma::clamp(T, 0.0, 5.0);
 
 
     step *= 0.9;
@@ -260,17 +260,25 @@ void Worker::randomizetable(petuum::Table<float>& table, int m, int n) {
   }
 }
 
-arma::fmat Worker::loadmat(petuum::Table<float>& table, int m, int n) {
+arma::fmat Worker::loadmat(petuum::Table<float>& table, int m, int n, bool transpose = false) {
   arma::fmat M(m, n);
   petuum::RowAccessor rowacc;
 
-  for (int i = 0; i < n; i++) {
-    std::vector<float> tmp;
-    const auto& col = table.Get<petuum::DenseRow<float>>(i, &rowacc);
-    col.CopyToVector(&tmp);
-    std::memcpy(M.colptr(i), tmp.data(), sizeof(float) * m);
+  if(transpose){
+    for (int i = 0; i < m; i++) {
+      std::vector<float> tmp;
+      const auto& row = table.Get<petuum::DenseRow<float>>(i, &rowacc);
+      row.CopyToVector(&tmp);
+      std::memcpy(M.rowptr(i), tmp.data(), sizeof(float) * n);
+    }
+  } else {
+    for (int i = 0; i < n; i++) {
+      std::vector<float> tmp;
+      const auto& col = table.Get<petuum::DenseRow<float>>(i, &rowacc);
+      col.CopyToVector(&tmp);
+      std::memcpy(M.colptr(i), tmp.data(), sizeof(float) * m);
+    }
   }
-
   return M;
 }
 
