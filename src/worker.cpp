@@ -10,82 +10,82 @@
 
 namespace mfals {
 
-Worker::Worker(int id, std::string basepath, int k, int iterations,
-               int evalrounds, int utableid, int vtableid, int ttableid)
+Worker::Worker(int id, std::string basepath, int rank, int iterations,
+               int evalrounds, int usertableid, int prodtableid, int wordstableid)
     : id(id),
       basepath(basepath),
-      k(k),
+      rank(rank),
       iterations(iterations),
       evalrounds(evalrounds),
-      utableid(utableid),
-      vtableid(vtableid),
-      ttableid(ttableid) {}
+      usertableid(usertableid),
+      prodtableid(prodtableid),
+      wordstableid(wordstableid) {}
 
 void Worker::run() {
-  petuum::PSTableGroup::RegisterThread();
+  petuum::PSTableGroup::RegisteRwordshread();
 
-  std::ostringstream Upath;
-  Upath << this->basepath << "/rank-" << this->id << "-train";
-  struct TensorData Udata = TensorData::parse(Upath.str());
-  int uoffset = Udata.offset;
-  auto Ru = Udata.R;
+  std::ostringstream userpath;
+  userpath << this->basepath << "/train" << this->id;
+  struct TensorData userdata = TensorData::parse(userpath.str());
+  int useroffset = userdata.offset;
+  auto Ruser = userdata.R;
   
-  std::ostringstream Vpath;
-  Vpath << this->basepath << "/rank-" << this->id << "-train";
-  struct TensorData Vdata = TensorData::parse(Vpath.str());
-  int voffset = Vdata.offset;
-  auto Rv = Vdata.R
+  std::ostringstream prodpath;
+  prodpath << this->basepath << "/train" << this->id;
+  struct TensorData proddata = TensorData::parse(prodpath.str());
+  int prodoffset = proddata.offset;
+  auto Rprod = proddata.R
   
-  std::ostringstream Tpath;
-  Tpath << this->basepath << "/rank-" << this->id << "-train";
-  struct TensorData Tdata = TensorData::parse(Tpath.str());
-  int toffset = Tdata.offset;
-  auto Rt = Tdata.R
+  std::ostringstream wordpath;
+  wordpath << this->basepath << "/train" << this->id;
+  struct TensorData worddata = TensorData::parse(wordpath.str());
+  int wordoffset = worddata.offset;
+  auto Rwords = worddata.R
   
-  petuum::Table<float> Utable =
-      petuum::PSTableGroup::GetTableOrDie<float>(this->utableid);
-  petuum::Table<float> Vtable =
-      petuum::PSTableGroup::GetTableOrDie<float>(this->vtableid);
-  petuum::Table<float> Ttable =
-      petuum::PSTableGroup::GetTableOrDie<float>(this->ttableid);
+  petuum::Table<float> usertable =
+      petuum::PSTableGroup::GetTableOrDie<float>(this->usertableid);
+  petuum::Table<float> prodtable =
+      petuum::PSTableGroup::GetTableOrDie<float>(this->prodtableid);
+  petuum::Table<float> wordtable =
+      petuum::PSTableGroup::GetTableOrDie<float>(this->wordstableid);
 
 
   // Register rows
   if (this->id == 0) {
-    for (int i = 0; i < this->k; i++) {
-      Utable.GetAsyncForced(i);
-      Vtable.GetAsyncForced(i);
-      Ttable.GetAsyncForced(i);
+    for (int i = 0; i < this->rank; i++) {
+      usertable.GetAsyncForced(i);
+      prodtable.GetAsyncForced(i);
+      wordtable.GetAsyncForced(i);
     }
   }
 
   petuum::PSTableGroup::GlobalBarrier();
 
-  LOG(INFO) << "Randomize U, V and T";
+  LOG(INFO) << "Randomize U, P and T";
 
-  if (this->id == 0) {
-    this->randomizetable(Utable, this->k, Ru.n_u);
-    this->randomizetable(Vtable, this->k, Rv.n_v);
-    this->randomizetable(Ttable, this->k, Rt.n_t);
+  if (id == 0) {
+    randomizetable(usertable, rank, Rwords.n_rows);
+    randomizetable(prodtable, rank, Rwords.n_cols);
+    randomizetable(wordtable, Ruser.n_words, rank);
   }
 
   petuum::PSTableGroup::GlobalBarrier();
 
-  LOG(INFO) << "Fetch U, V and T on worker " << this->id;
+  LOG(INFO) << "Fetch U, P and T on worker " << id;
 
-  // Fetch U, V and T
-  auto U = this->loadmat(Utable, Ru.n_u, this->k);
-  auto V = this->loadmat(Vtable, Rv.n_v, this->k);
-  auto T = this->loadmat(Ttable, Rt.n_t, this->k);
+  // Fetch U, P and T
+  auto U = loadmat(usertable, Rwords.n_rows, rank);
+  auto P = loadmat(prodtable, Rwords.n_cols, rank);
+  auto T = loadmat(wordtable, rank, Ruser.n_words);
 
   LOG(INFO) << "Start optimization";
 
   float step = 1.0;
 
-  for (int i = 0; i < this->iterations; i++) {
-    LOG(INFO) << "Optimization round " << i << " on worker " << this->id;
+  for (int i = 0; i < iterations; i++) {
+    LOG(INFO) << "Optimization round " << i << " on worker " << id;
 
-    if (this->id == 0) {
+    if (id == 0) {
       std::cout << "Round " << i + 1 << " with step length " << step
                 << std::endl;
     }
@@ -93,21 +93,19 @@ void Worker::run() {
     ///////
     // Compute gradient for U
     ///////
-    arma::fmat Ugrad(Ru.n_u, this->k, arma::fill::zeros);
+    arma::fmat Ugrad(Ruser.n_rows, rank, arma::fill::zeros);
    
-    // iterate over all uv pairs in Ru
-    for (std::size_t i = 0; i != Ru.n_uv; ++i) {
-      int uind = Ru.uindex[Ru.i];
-      int vind = Ru.vindex[Ru.i];
+    // iterate over all up pairs in Ruser
+    for (std::size_t i = 0; i != Ruser.n_nz; ++i) {
+      int userind = Ruser.rows[i];
+      int prodind = Ruser.cols[i];
       
-      auto Td = nextWordBag();
+      auto wordbag = Ruser.getWordBagAt(i);
       
       // Probably incorrect usage of armadillo ...
-      arma::frowvec diff = (U.row(uind + uoffset) % V.row(vind)) * arma::inplace_trans(T)  - Td;
+      arma::frowvec diff = (U.row(userind + useroffset) % P.row(prodind)) * T - wordbag;
 
-      for (int x = 0; x < this->k; x++) {
-        Ugrad(uind, x) += 2 * V(vind, x) * arma::dot(diff, T.row(d));
-      }
+      Ugrad.row(userind) += 2 * P.row(prodind) % (diff * arma::inplace_trans(T));
     }
     
     //TODO check if normalising makes sense
@@ -116,139 +114,135 @@ void Worker::run() {
 
     // Update U table
     for (int j = 0; j < Ugrad.n_cols; j++) {
-      petuum::DenseUpdateBatch<float> batch(uoffset, Ugrad.n_rows);
+      petuum::DenseUpdateBatch<float> batch(useroffset, Ugrad.n_rows);
 
       std::memcpy(batch.get_mem(), Ugrad.colptr(j),
                   Ugrad.n_rows * sizeof(float));
 
-      Utable.DenseBatchInc(j, batch);
+      usertable.DenseBatchInc(j, batch);
     }
 
     petuum::PSTableGroup::GlobalBarrier();
 
     // Fetch updated U
-    U = loadmat(Utable, U.n_rows, U.n_cols);
+    U = loadmat(usertable, U.n_rows, U.n_cols);
     U = arma::clamp(U, 0.0, 5.0);
     
     
     ///////
-    // Compute gradient for V
+    // Compute gradient for P
     ///////
-    arma::fmat Vgrad(Rv.n_v, this->k, arma::fill::zeros);
+    arma::fmat Pgrad(Rprod.n_rows, rank, arma::fill::zeros);
    
-    // iterate over all uv pairs in Rv
-    for (std::size_t i = 0; i != Rv.n_uv; ++i) {
-      int uind = Rv.uindex[Rv.i];
-      int vind = Rv.vindex[Rv.i];
+    // iterate over all up pairs in Rprod
+    for (std::size_t i = 0; i != Rprod.n_uv; ++i) {
+      int userind = Rprod.rows[Rprod.i];
+      int prodind = Rprod.cols[Rprod.i];
       
-      auto Td = nextWordBag();
+      auto wordbag = Rprod.getWordBagAt(i);
       
       // Probably incorrect usage of armadillo ...
-      arma::frowvec diff = (U.row(uind) % V.row(vind + voffset)) * arma::inplace_trans(T)  - Td;
+      arma::frowvec diff = (U.row(userind) % P.row(prodind + prodoffset)) * T - wordbag;
 
-      for (int x = 0; x < k; x++) {
-        Ugrad(uind, x) += 2 * U(uind, x) * arma::dot(diff, T.row(d));
-      }
+      Pgrad(prodind) += 2 * U.row(userind) % (diff * arma::inplace_trans(T));
     }
     
     //TODO check if normalising makes sense
-    Vgrad = arma::normalise(Vgrad, 2, 1);
-    Vgrad = Vgrad * (-step);
+    Pgrad = arma::normalise(Pgrad, 2, 1);
+    Pgrad = Pgrad * (-step);
 
-    // Update U table
-    for (int j = 0; j < Vgrad.n_cols; j++) {
-      petuum::DenseUpdateBatch<float> batch(voffset, Vgrad.n_rows);
+    // Update P table
+    for (int j = 0; j < Pgrad.n_cols; j++) {
+      petuum::DenseUpdateBatch<float> batch(prodoffset, Pgrad.n_rows);
 
-      std::memcpy(batch.get_mem(), Vgrad.colptr(j),
-                  Vgrad.n_rows * sizeof(float));
+      std::memcpy(batch.get_mem(), Pgrad.colptr(j),
+                  Pgrad.n_rows * sizeof(float));
 
-      Vtable.DenseBatchInc(j, batch);
+      prodtable.DenseBatchInc(j, batch);
     }
 
     petuum::PSTableGroup::GlobalBarrier();
 
-    // Fetch updated V
-    V = loadmat(Vtable, V.n_rows, V.n_cols);
-    V = arma::clamp(V, 0.0, 5.0);
+    // Fetch updated P
+    P = loadmat(prodtable, P.n_rows, P.n_cols);
+    P = arma::clamp(P, 0.0, 5.0);
     
     
     
     ///////
     // Compute gradient for T
     ///////
-    arma::fmat Tgrad(Rt.n_t, k, arma::fill::zeros);
+    arma::fmat Tgrad(rank, Rwords.n_words, arma::fill::zeros);
    
-    // iterate over all uv pairs in Rv
-    for (std::size_t i = 0; i != Rv.n_uv; ++i) {
-      int uind = Rv.uindex[Rv.i];
-      int vind = Rv.vindex[Rv.i];
+    // iterate over all uv pairs in Rwords
+    for (std::size_t i = 0; i != Rwords.n_nz; ++i) {
+      int userind = Rprod.rows[Rprod.i];
+      int prodind = Rprod.cols[Rprod.i];
       
-      auto Td = nextWordBag();
+      auto wordbag = Rwords.getWordBagAt(i);
       
       // Probably incorrect usage of armadillo ...
-      arma::frowvec diff = (U.row(uind) % V.row(vind + voffset)) * arma::inplace_trans(T.rows(toffset, toffset + Rt.n_t))  - Td;
+      arma::frowvec diff = (U.row(userind) % P.row(prodind)) * T.cols(wordoffset, wordoffset + Rwords.n_words) - wordbag;
 
-      for (int x = 0; x < k; x++) {
-        Tgrad.row(x) += 2 * V(vind, x) * U(uind, x) * diff;
+      for (int x = 0; x < rank; x++) {
+        Tgrad.row(x) += 2 * P(prodind, x) * U(userind, x) * diff;
       }
     }
     
     //TODO check if normalising makes sense
-    Vgrad = arma::normalise(Vgrad, 2, 1);
-    Vgrad = Vgrad * (-step);
+    Tgrad = arma::normalise(Tgrad, 2, 1);
+    Tgrad = Tgrad * (-step);
 
-    // Update U table
-    for (int j = 0; j < Vgrad.n_cols; j++) {
-      petuum::DenseUpdateBatch<float> batch(voffset, Vgrad.n_rows);
+    // Update T table
+    for (int j = 0; j < Tgrad.n_cols; j++) {
+      petuum::DenseUpdateBatch<float> batch(prodoffset, Tgrad.n_rows);
 
-      std::memcpy(batch.get_mem(), Vgrad.colptr(j),
-                  Vgrad.n_rows * sizeof(float));
+      std::memcpy(batch.get_mem(), Tgrad.colptr(j),
+                  Tgrad.n_rows * sizeof(float));
 
-      Vtable.DenseBatchInc(j, batch);
+      prodtable.DenseBatchInc(j, batch);
     }
 
     petuum::PSTableGroup::GlobalBarrier();
 
-    // Fetch updated V
-    V = loadmat(Vtable, V.n_rows, V.n_cols);
-    V = arma::clamp(V, 0.0, 5.0);
-    
-    
-    
-    
+    // Fetch updated P
+    U = loadmat(prodtable, U.n_rows, U.n_cols);
+    U = arma::clamp(U, 0.0, 5.0);
+
 
     step *= 0.9;
 
     // Evaluate
-    if (this->evalrounds > 0 && (i + 1) % this->evalrounds == 0) {
-      if (this->id == 0) {
+    if (evalrounds > 0 && (i + 1) % evalrounds == 0) {
+      if (id == 0) {
         std::cout << "Test => ";
-        this->evaltest(P, UT);
+        evaltest(U, V, T);
       }
 
-      if (this->id == 0) {
+      if (id == 0) {
         std::cout << "Training => ";
-        this->eval(P, UT, Rprod, poffset, 0);
+        eval(U, P, T, Rprod, poffset, 0);
       }
     }
   }
 
   // Evaluate (if not evaluated in last round)
-  if (this->id == 0) {
-    if (this->evalrounds <= 0 || this->iterations % this->evalrounds != 0) {
+  if (id == 0) {
+    if (evalrounds <= 0 || iterations % evalrounds != 0) {
       std::cout << "Test => ";
-      this->evaltest(P, UT);
+      evaltest(P, UT);
       std::cout << "Training => ";
-      this->eval(P, UT, Rprod, poffset, 0);
+      eval(U, P, T, Rprod, poffset, 0);
     }
 
+    U.save("out/U", arma::csv_ascii);
     P.save("out/P", arma::csv_ascii);
-    UT.save("out/UT", arma::csv_ascii);
+    P.save("out/T", arma::csv_ascii);
   }
 
   LOG(INFO) << "Shutdown worker " << this->id;
 
-  petuum::PSTableGroup::DeregisterThread();
+  petuum::PSTableGroup::DeregisteRwordshread();
 }
 
 // Initialize table as an m*n matrix with random entries
@@ -280,35 +274,33 @@ arma::fmat Worker::loadmat(petuum::Table<float>& table, int m, int n) {
   return M;
 }
 
-void Worker::evaltest(arma::fmat& P, arma::fmat& UT) {
+void Worker::evaltest(arma::fmat& U, arma::fmat& P, arma::fmat& T) {
   std::ostringstream testpath;
-  testpath << this->basepath << "/test";
+  teswordpath << basepath << "/test";
   std::ifstream f(testpath.str(), std::ios::binary);
-  auto Rtest = TensorData::parsemat(f);
+  auto Rtest = TensorData::parseTensor(f);
 
-  this->eval(P, UT, Rtest, 0, 0);
+  eval(U, P, T, Rtest, 0, 0);
 }
 
-void Worker::eval(arma::fmat& P, arma::fmat& UT, arma::sp_fmat& R,
-                  int rowoffset, int coloffset) {
+void Worker::eval(arma::fmat& U, arma::fmat& P, arma::fmat& T, Sparse3dTensor R,
+                  int useroffset, int prodoffset) {
   float mse = 0;
 
-  arma::sp_fmat::const_iterator start = R.begin();
-  arma::sp_fmat::const_iterator end = R.end();
-  for (arma::sp_fmat::const_iterator it = start; it != end; ++it) {
-    int row = it.row();
-    int col = it.col();
+  for (size_t i = 0; i != R.n_nz; ++i) {
+    int userind = R.rows(i);
+    int prodind = R.cols(i);
 
-    float error =
-        (*it) - arma::dot(P.row(row + rowoffset), UT.row(col + coloffset));
-    mse += error * error;
+    arma::frowvec error =
+        R.getWordBagAt(i) - (P.row(userind + useroffset) % UT.row(prodind + prodoffset)) * T;
+    mse += arma::norm(error);
 
-    LOG(INFO) << "Product " << std::setw(7) << row + rowoffset << ", User "
-              << std::setw(7) << col + coloffset << ": " << std::setw(7)
-              << error << " (" << *it << ")";
+    LOG(INFO) << "User " << std::setw(7) << userind + useroffset << ", Product "
+              << std::setw(7) << prodind + prodoffset << ": " << std::setw(7)
+              << error; //<< " (" << R.getWordBagAt(i) << ")";
   }
 
-  std::cout << "MSE = " << mse / R.n_nonzero << std::endl;
+  std::cout << "MSE = " << mse / R.n_nz << std::endl;
 }
 }
 

@@ -8,25 +8,25 @@
 
 
 struct Sparse3dTensor {
-  // number of non-zero entries
-  int n_nz;
   
   // size in each dim
-  int n_u;
-  int n_v;
-  int n_t;
-
-  // indices
-  std::vector<unsigned int> uindex;
-  std::vector<unsigned int> vindex;
-  std::vector<unsigned int> tindex;
+  unsigned int n_rows;
+  unsigned int n_cols;
+  unsigned int n_words;
   
-  // for iterating through all uv in R
-  int n_uv;
-  int i;
-  arma::frowvec nextWordBag();
-  bool hasNext();
-  void resetIt();
+  // number of non-zero word bags
+  unsigned int n_nz;
+  // number of non-zero word bag elements
+  unsigned int n_vals;
+  
+  // indices
+  std::vector<unsigned int> rows;
+  std::vector<unsigned int> cols;
+  std::vector<unsigned int> bags;
+  std::vector<unsigned int> words;
+  std::vector<float> vals;
+  
+  arma::frowvec getWordBagAt(unsigned int i);
 };
 
 
@@ -34,11 +34,11 @@ struct Sparse3dTensor {
 struct TensorData {
   int offset;
   Sparse3dTensor R;
-
+  
   static struct TensorData parse(std::string path);
-
-  static arma::sp_fmat parseTensor(std::ifstream& f);
+  static struct Sparse3dTensor parseTensor(std::ifstream& f);
 };
+
 
 #endif  // MATRIX_DATA_H_
 

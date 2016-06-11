@@ -10,7 +10,7 @@ namespace mfals {
 
 class Worker {
  public:
-  Worker(int id, std::string basepath, int k, int iterations, int evalrounds,
+  Worker(int id, std::string basepath, int rank, int iterations, int evalrounds,
          int ptableid, int utableid);
 
   void run();
@@ -18,7 +18,7 @@ class Worker {
  private:
   int id;
   std::string basepath;
-  int k;
+  int rank;
   int iterations;
   int evalrounds;
   int ptableid;
@@ -32,7 +32,7 @@ class Worker {
 
   void evaltest(arma::fmat& P, arma::fmat& UT);
   void eval(arma::fmat& P, arma::fmat& UT, arma::sp_fmat& R, int rowoffset,
-            int coloffset);
+            int prodoffset);
 };
 }
 
