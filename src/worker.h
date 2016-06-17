@@ -5,13 +5,14 @@
 
 #include <armadillo>
 #include <petuum_ps_common/include/petuum_ps.hpp>
+#include "tensor_data.h"
 
-namespace mfals {
+namespace tfals {
 
 class Worker {
  public:
-  Worker(int id, std::string basepath, int rank, int iterations, int evalrounds,
-         int ptableid, int utableid);
+  Worker(int id, std::string basepath, int rank, int iterations,
+               int evalrounds, int usertableid, int prodtableid, int wordstableid);
 
   void run();
 
@@ -21,8 +22,9 @@ class Worker {
   int rank;
   int iterations;
   int evalrounds;
-  int ptableid;
-  int utableid;
+  int usertableid;
+  int prodtableid;
+  int wordtableid;
 
   // Initialize table as an m*n matrix with random entries
   void randomizetable(petuum::Table<float>& table, int m, int n);
@@ -30,9 +32,9 @@ class Worker {
   // Load matrix from a table
   arma::fmat loadmat(petuum::Table<float>& table, int m, int n);
 
-  void evaltest(arma::fmat& P, arma::fmat& UT);
-  void eval(arma::fmat& P, arma::fmat& UT, arma::sp_fmat& R, int rowoffset,
-            int prodoffset);
+  void evaltest(arma::fmat& U, arma::fmat& P, arma::fmat& T);
+  void eval(arma::fmat& U, arma::fmat& P, arma::fmat& T, Sparse3dTensor& R,
+            int useroffset, int prodoffset);
 };
 }
 

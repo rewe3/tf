@@ -6,7 +6,7 @@
 
 #include "worker.h"
 
-#include "matrix_data.h"
+#include "tensor_data.h"
 
 namespace tfals {
 
@@ -19,37 +19,37 @@ Worker::Worker(int id, std::string basepath, int rank, int iterations,
       evalrounds(evalrounds),
       usertableid(usertableid),
       prodtableid(prodtableid),
-      wordstableid(wordstableid) {}
+      wordtableid(wordtableid) {}
 
 void Worker::run() {
-  petuum::PSTableGroup::RegisteRwordshread();
+  petuum::PSTableGroup::RegisterThread();
 
   std::ostringstream userpath;
-  userpath << this->basepath << "/train" << this->id;
+  userpath << this->basepath << "/_user_train" << this->id;
   struct TensorData userdata = TensorData::parse(userpath.str());
   int useroffset = userdata.offset;
   auto Ruser = userdata.R;
   
   std::ostringstream prodpath;
-  prodpath << this->basepath << "/train" << this->id;
+  prodpath << this->basepath << "/_prod_train" << this->id;
   struct TensorData proddata = TensorData::parse(prodpath.str());
   int prodoffset = proddata.offset;
-  auto Rprod = proddata.R
+  auto Rprod = proddata.R;
   
   std::ostringstream wordpath;
-  wordpath << this->basepath << "/train" << this->id;
+  wordpath << this->basepath << "/_word_train" << this->id;
   struct TensorData worddata = TensorData::parse(wordpath.str());
   int wordoffset = worddata.offset;
-  auto Rwords = worddata.R
+  auto Rwords = worddata.R;
   
   petuum::Table<float> usertable =
       petuum::PSTableGroup::GetTableOrDie<float>(this->usertableid);
   petuum::Table<float> prodtable =
       petuum::PSTableGroup::GetTableOrDie<float>(this->prodtableid);
   petuum::Table<float> wordtable =
-      petuum::PSTableGroup::GetTableOrDie<float>(this->wordstableid);
+      petuum::PSTableGroup::GetTableOrDie<float>(this->wordtableid);
 
-
+  std::cout << id << " got tables" << std::endl;
   // Register rows
   if (this->id == 0) {
     for (int i = 0; i < this->rank; i++) {
@@ -60,29 +60,37 @@ void Worker::run() {
   }
 
   petuum::PSTableGroup::GlobalBarrier();
-
+  
+  std::cout << id << " past 1st barrier" << std::endl;
+  
   LOG(INFO) << "Randomize U, P and T";
 
   if (id == 0) {
+    std::cout << Rwords.n_rows << " " << Rwords.n_cols << " " << Ruser.n_words << std::endl;
     randomizetable(usertable, rank, Rwords.n_rows);
     randomizetable(prodtable, rank, Rwords.n_cols);
     randomizetable(wordtable, rank, Ruser.n_words);
   }
-
-  petuum::PSTableGroup::GlobalBarrier();
-
+  std::cout << id << " before 2nd barrier" << std::endl;
+  //petuum::PSTableGroup::GlobalBarrier();
+  std::cout << id << " past 2nd barrier" << std::endl;
+  
   LOG(INFO) << "Fetch U, P and T on worker " << id;
-
   // Fetch U, P and T
-  auto U = loadmat(usertable, Rwords.n_rows, rank);
-  auto P = loadmat(prodtable, Rwords.n_cols, rank);
-  auto T = loadmat(wordtable, rank, Ruser.n_words, true);
+  std::cout << id <<" U size " << Rwords.n_rows << " " << rank << std::endl;
+  auto U = this->loadmat(usertable, Rwords.n_rows, rank);
+  std::cout << id <<" P size " << Rwords.n_cols << " " << rank << std::endl;
+  auto P = this->loadmat(prodtable, Rwords.n_cols, rank);
+  std::cout << id <<" T size " << Ruser.n_words << " " << rank << std::endl;
+  auto T = this->loadmat(wordtable, Ruser.n_words, rank);
+  arma::inplace_trans(T);
 
   LOG(INFO) << "Start optimization";
 
+  std::cout << id << " start optimizing" << std::endl;
   float step = 1.0;
 
-  for (int i = 0; i < iterations; i++) {
+  for (int i = 0; i < this->iterations; i++) {
     LOG(INFO) << "Optimization round " << i << " on worker " << id;
 
     if (id == 0) {
@@ -105,7 +113,7 @@ void Worker::run() {
       // Probably incorrect usage of armadillo ...
       arma::frowvec diff = (U.row(userind + useroffset) % P.row(prodind)) * T - wordbag;
 
-      Ugrad.row(userind) += 2 * P.row(prodind) % (diff * arma::inplace_trans(T));
+      Ugrad.row(userind) += 2 * P.row(prodind) % (diff * T.t());
     }
     
     //TODO check if normalising makes sense
@@ -125,7 +133,7 @@ void Worker::run() {
     petuum::PSTableGroup::GlobalBarrier();
 
     // Fetch updated U
-    U = loadmat(usertable, U.n_rows, U.n_cols);
+    U = this->loadmat(usertable, U.n_rows, U.n_cols);
     U = arma::clamp(U, 0.0, 5.0);
     
     
@@ -135,16 +143,16 @@ void Worker::run() {
     arma::fmat Pgrad(Rprod.n_rows, rank, arma::fill::zeros);
    
     // iterate over all up pairs in Rprod
-    for (std::size_t i = 0; i != Rprod.n_uv; ++i) {
-      int userind = Rprod.rows[Rprod.i];
-      int prodind = Rprod.cols[Rprod.i];
+    for (std::size_t i = 0; i != Rprod.n_nz; ++i) {
+      int userind = Rprod.rows[i];
+      int prodind = Rprod.cols[i];
       
       auto wordbag = Rprod.getWordBagAt(i);
       
       // Probably incorrect usage of armadillo ...
       arma::frowvec diff = (U.row(userind) % P.row(prodind + prodoffset)) * T - wordbag;
 
-      Pgrad(prodind) += 2 * U.row(userind) % (diff * arma::inplace_trans(T));
+      Pgrad.row(prodind) += 2 * U.row(userind) % (diff * T.t());
     }
     
     //TODO check if normalising makes sense
@@ -162,9 +170,9 @@ void Worker::run() {
     }
 
     petuum::PSTableGroup::GlobalBarrier();
-
+  
     // Fetch updated P
-    P = loadmat(prodtable, P.n_rows, P.n_cols);
+    P = this->loadmat(prodtable, P.n_rows, P.n_cols);
     P = arma::clamp(P, 0.0, 5.0);
     
     
@@ -176,8 +184,8 @@ void Worker::run() {
    
     // iterate over all uv pairs in Rwords
     for (std::size_t i = 0; i != Rwords.n_nz; ++i) {
-      int userind = Rprod.rows[Rprod.i];
-      int prodind = Rprod.cols[Rprod.i];
+      int userind = Rprod.rows[i];
+      int prodind = Rprod.cols[i];
       
       auto wordbag = Rwords.getWordBagAt(i);
       
@@ -206,33 +214,33 @@ void Worker::run() {
     petuum::PSTableGroup::GlobalBarrier();
 
     // Fetch updated T
-    T = loadmat(wordtable, T.n_rows, T.n_cols, true);
+    T = this->loadmat(wordtable, T.n_rows, T.n_cols);
     T = arma::clamp(T, 0.0, 5.0);
-
+    arma::inplace_trans(T);
 
     step *= 0.9;
 
     // Evaluate
-    if (evalrounds > 0 && (i + 1) % evalrounds == 0) {
+    if (this->evalrounds > 0 && (i + 1) % this->evalrounds == 0) {
       if (id == 0) {
         std::cout << "Test => ";
-        evaltest(U, V, T);
+        this->evaltest(U, P, T);
       }
 
       if (id == 0) {
         std::cout << "Training => ";
-        eval(U, P, T, Rprod, poffset, 0);
+        eval(U, P, T, Ruser, useroffset, 0);
       }
     }
   }
 
   // Evaluate (if not evaluated in last round)
   if (id == 0) {
-    if (evalrounds <= 0 || iterations % evalrounds != 0) {
+    if (this->evalrounds <= 0 || this->iterations % this->evalrounds != 0) {
       std::cout << "Test => ";
-      evaltest(P, UT);
+      this->evaltest(U, P, T);
       std::cout << "Training => ";
-      eval(U, P, T, Rprod, poffset, 0);
+      eval(U, P, T, Ruser, useroffset, 0);
     }
 
     U.save("out/U", arma::csv_ascii);
@@ -242,7 +250,7 @@ void Worker::run() {
 
   LOG(INFO) << "Shutdown worker " << this->id;
 
-  petuum::PSTableGroup::DeregisteRwordshread();
+  petuum::PSTableGroup::DeregisterThread();
 }
 
 // Initialize table as an m*n matrix with random entries
@@ -260,47 +268,43 @@ void Worker::randomizetable(petuum::Table<float>& table, int m, int n) {
   }
 }
 
-arma::fmat Worker::loadmat(petuum::Table<float>& table, int m, int n, bool transpose = false) {
+arma::fmat Worker::loadmat(petuum::Table<float>& table, int m, int n) {
   arma::fmat M(m, n);
   petuum::RowAccessor rowacc;
 
-  if(transpose){
-    for (int i = 0; i < m; i++) {
-      std::vector<float> tmp;
-      const auto& row = table.Get<petuum::DenseRow<float>>(i, &rowacc);
-      row.CopyToVector(&tmp);
-      std::memcpy(M.rowptr(i), tmp.data(), sizeof(float) * n);
-    }
-  } else {
-    for (int i = 0; i < n; i++) {
-      std::vector<float> tmp;
-      const auto& col = table.Get<petuum::DenseRow<float>>(i, &rowacc);
-      col.CopyToVector(&tmp);
-      std::memcpy(M.colptr(i), tmp.data(), sizeof(float) * m);
+  for (int i = 0; i < n; i++) {
+    try{
+    std::vector<float> tmp;
+    std::cout << "It " << i << std::endl;
+    const auto& col = table.Get<petuum::DenseRow<float>>(i, &rowacc);
+    col.CopyToVector(&tmp);
+    std::cout << tmp.size() << std::endl;
+    std::memcpy(M.colptr(i), tmp.data(), sizeof(float) * m);
+    } catch(exception& e){
     }
   }
   return M;
 }
 
 void Worker::evaltest(arma::fmat& U, arma::fmat& P, arma::fmat& T) {
-  std::ostringstream testpath;
-  teswordpath << basepath << "/test";
+  /*std::ostringstream testpath;
+  testpath << basepath << "/test";
   std::ifstream f(testpath.str(), std::ios::binary);
   auto Rtest = TensorData::parseTensor(f);
 
-  eval(U, P, T, Rtest, 0, 0);
+  eval(U, P, T, Rtest, 0, 0);*/
 }
 
-void Worker::eval(arma::fmat& U, arma::fmat& P, arma::fmat& T, Sparse3dTensor R,
+void Worker::eval(arma::fmat& U, arma::fmat& P, arma::fmat& T, Sparse3dTensor& R,
                   int useroffset, int prodoffset) {
   float mse = 0;
 
   for (size_t i = 0; i != R.n_nz; ++i) {
-    int userind = R.rows(i);
-    int prodind = R.cols(i);
+    int userind = R.rows[i];
+    int prodind = R.cols[i];
 
     arma::frowvec error =
-        R.getWordBagAt(i) - (P.row(userind + useroffset) % UT.row(prodind + prodoffset)) * T;
+        R.getWordBagAt(i) - (U.row(userind + useroffset) % P.row(prodind + prodoffset)) * T;
     mse += arma::norm(error);
 
     LOG(INFO) << "User " << std::setw(7) << userind + useroffset << ", Product "

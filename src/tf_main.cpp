@@ -5,6 +5,12 @@
 #include <thread>
 #include <utility>
 
+#include <stdio.h>
+#include <execinfo.h>
+#include <signal.h>
+#include <stdlib.h>
+#include <unistd.h>
+
 #include <armadillo>
 #include <boost/program_options/options_description.hpp>
 #include <boost/program_options/parsers.hpp>
@@ -12,7 +18,7 @@
 #include <glog/logging.h>
 #include <petuum_ps_common/include/petuum_ps.hpp>
 
-#include "matrix_data.h"
+#include "tensor_data.h"
 #include "worker.h"
 
 enum RowType { FLOAT };
@@ -20,6 +26,19 @@ enum RowType { FLOAT };
 enum Table { U, P, T };
 
 namespace po = boost::program_options;
+
+void handler(int sig) {
+  void *array[10];
+  size_t size;
+
+  // get void*'s for all entries on the stack
+  size = backtrace(array, 10);
+
+  // print out all the frames to stderr
+  fprintf(stderr, "Error: signal %d:\n", sig);
+  backtrace_symbols_fd(array, size, STDERR_FILENO);
+  exit(1);
+}
 
 int main(int argc, char** argv) {
   google::InitGoogleLogging(argv[0]);
@@ -30,10 +49,10 @@ int main(int argc, char** argv) {
       ("rank,r", po::value<int>()->default_value(7), "Rank of the factors")
       ("iterations,i", po::value<int>()->default_value(1),
        "Number of iterations")
-      ("users", po::value<int>(), "Number of users")
-      ("products", po::value<int>(), "Number of products")
-      ("words", po::value<int>(), "Number of words")
-      ("workers", po::value<int>()->default_value(3),
+      ("users", po::value<int>()->default_value(1429), "Number of users")
+      ("products", po::value<int>()->default_value(900), "Number of products")
+      ("words", po::value<int>()->default_value(3265), "Number of words")
+      ("workers", po::value<int>()->default_value(1),
        "Number of workers")
       ("eval-rounds,e", po::value<int>()->default_value(0),
        "Eval the model every e rounds");
@@ -66,7 +85,8 @@ int main(int argc, char** argv) {
   // not receiving a kClientShutDown message.
   table_group_config.num_comm_channels_per_client = 1;
   table_group_config.client_id = 0;
-  petuum::PSTableGroup::Init(table_group_config, false);
+  CHECK(petuum::PSTableGroup::Init(table_group_config, false))
+     << "Failed to create U table";
 
   // Create tables
   petuum::ClientTableConfig u_config;
@@ -115,11 +135,16 @@ int main(int argc, char** argv) {
   petuum::PSTableGroup::CreateTableDone();
 
   std::vector<std::thread> threads(num_workers);
-
+  
+  std::cout << "Start creating workers" << std::endl;
+  
+  
+  //signal(SIGSEGV, handler);
+  
   // run workers
   for (int i = 0; i < num_workers; i++) {
     threads[i] = std::thread(
-        &mfals::Worker::run,
+        &tfals::Worker::run,
         std::unique_ptr<tfals::Worker>(new tfals::Worker(
             i, "out", rank, iterations, eval_rounds, Table::U, Table::P, Table::T)));
   }
