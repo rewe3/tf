@@ -10,10 +10,10 @@ import argparse
 import time
 from parse_and_split import *
 
-def save(f, offset, rows, cols, bags, words, vals):
+def save(f, offset, rows, cols, bags, words, vals, n_words):
     assert len(rows) == len(cols) == len(bags), "Wrong list length for save"
-    print offset, max(rows)+1, max(cols)+1, max(words)+1, len(rows), len(vals)
-    array.array("I", [offset, max(rows)+1, max(cols)+1, max(words)+1, len(rows), len(vals)]).write(f)
+    print offset, max(rows)+1, max(cols)+1, n_words, len(rows), len(vals)
+    array.array("I", [offset, max(rows)+1, max(cols)+1, n_words, len(rows), len(vals)]).write(f)
     array.array("I", rows).write(f)
     array.array("I", cols).write(f)
     array.array("I", bags).write(f)
@@ -21,7 +21,7 @@ def save(f, offset, rows, cols, bags, words, vals):
     array.array("f", vals).write(f)
 
 
-def save_df(df, path, userkeys, prodkeys, offset):
+def save_df(df, path, userkeys, prodkeys, offset, n_words):
     sorteddf = df.sort_values(['reviewerID', 'asin'])
     users = [userkeys[u] for u in sorteddf['reviewerID']]
     prods = [prodkeys[p] for p in sorteddf['asin']]
@@ -30,7 +30,7 @@ def save_df(df, path, userkeys, prodkeys, offset):
     words, values = zip(*list(itertools.chain.from_iterable(wbtmp)))
 
     with open(path, 'wb') as f:
-        save(f, offset, users, prods, bags, words, values)
+        save(f, offset, users, prods, bags, words, values, n_words)
 
 
 def save_df_word(df, path, userkeys, prodkeys, offset, k):
@@ -42,7 +42,7 @@ def save_df_word(df, path, userkeys, prodkeys, offset, k):
         wbtmp = [sorted([(pos, count) for pos, count in wb.iteritems()], key=lambda x: x[0]) for wb in sorteddf[ind]]
         words, values = zip(*list(itertools.chain.from_iterable(wbtmp)))
         with open(path + `ind`, 'wb') as f:
-            save(f, offset[ind], users, prods, bags, words, values)
+            save(f, offset[ind], users, prods, bags, words, values, max(words)+1)
 
 
 def main():
@@ -59,14 +59,16 @@ def main():
     # build vocab
     eng = spacy.en.English()
     end = time.clock()
-    print "eng", start - end
+    print "eng", end - start
 
     start = time.clock()
 
-    words = get_frequent_words(get_rev(args.data, 'reviewText'), 10, eng)
-
+    words_freq = get_frequent_words(get_rev(args.data, 'reviewText'), 10, eng)
+    # somehow the empty string is included, mabey empty reviews?
+    words_freq = [(w, count) for w, count in words_freq if w != 0]
+    words, counts = zip(*words_freq)
     end = time.clock()
-    print "build vocab done", start - end
+    print "build vocab done", end - start
 
     start = time.clock()
 
@@ -74,7 +76,7 @@ def main():
     bags = get_word_bags(words, get_rev(args.data, 'reviewText'), eng)
 
     end = time.clock()
-    print "word bags done", start - end
+    print "word bags done", end - start
     # parse dataframe
     df = getDF(args.data)
 
@@ -97,22 +99,23 @@ def main():
     # save user-split train files
     for ind, (offset, df_user) in enumerate(get_k_splits(df_total, 'reviewerID', users, args.k)):
         outpath = os.path.join(args.out, "_user_train" + `ind`)
-        save_df(df_user, outpath, userkeys, prodkeys, offset)
+        save_df(df_user, outpath, userkeys, prodkeys, offset, len(words))
     print "saved usersplit"
     # save product-split train files
     for ind, (offset, df_prod) in enumerate(get_k_splits(df_total, 'asin', prods, args.k)):
         outpath = os.path.join(args.out, "_prod_train" + `ind`)
-        save_df(df_prod, outpath, userkeys, prodkeys, offset)
+        save_df(df_prod, outpath, userkeys, prodkeys, offset, len(words))
     print "saved prodsplit"
     # save words-split train files
-    offset, df_word = get_k_splits_words(df_total, df_total['wordBags'], words, args.k)
+    offset, df_word = get_k_splits_words(df_total, df_total['wordBags'], words, counts, args.k)
     print df_word.columns.values
     outpath = os.path.join(args.out, "_word_train")
     save_df_word(df_word, outpath, userkeys, prodkeys, offset, args.k)
     print "saved wordsplit"
 
-    json.dump({'users': len(users), 'products': len(prods), 'words' : len(words), 'vocab' : [eng.vocab.strings[w] for w in words]},
-        open(os.path.join(args.out, "meta.txt"), "w"))
+    json.dump([{'users': len(users), 'products': len(prods), 'words' : len(words)}, 
+            {'vocab' : [eng.vocab.strings[w.item()] for w in words]}], 
+            open(os.path.join(args.out, "meta.txt"), "w"))
 
 if __name__ == "__main__":
     main()
