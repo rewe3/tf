@@ -31,16 +31,14 @@ def exclude(word):
     else:
         return False
 
-def get_frequent_words(reviews, threshold, nlp):
+def get_frequent_words(reviews, threshold, nlp, n_threads=4):
     counter = Counter()
-    doc = nlp.pipe(reviews, n_threads=4, entity=False, parse=False)
+    doc = nlp.pipe(reviews, n_threads, entity=False, parse=False)
     for review in doc:
-        counter.update(review.count_by(spacy.attrs.LEMMA))
-        
-    fc = {key:val for key, val in counter.iteritems() if not exclude(nlp.vocab.strings[key])}
-    #fc = {key:val for key, val in counter.iteritems() if not exclude(nlp.vocab.strings[key])}
-    
-    return [key for key, val in fc.iteritems() if val > threshold]
+        words = review.to_array([spacy.attrs.LEMMA, spacy.attrs.IS_ALPHA, spacy.attrs.IS_STOP])
+        for w in words[(words[:,1] == 1) & (words[:,2] == 0)][:,0]:
+            counter[w] += 1
+    return [(key,val) for key, val in counter.iteritems() if val > threshold]
 
 def get_word_bags(voc, reviews, nlp):
     ret = []
@@ -67,10 +65,12 @@ def split_dict(d, k_splits):
         ret += [{key: val for key, val in d.iteritems() if (k_splits[i-1] < key) & (key <= k_splits[i])}]
     return ret
 
-def get_k_splits_words(df, wbdf, words, k):
-    length = len(words)
+def get_k_splits_words(df, wbdf, words, counts, k):
+    cum_counts = np.array(counts).cumsum()
+    length = cum_counts[-1]
     k_len = [length/k] * (k-1)+[length - length/k * (k-1)]
-    k_splits = np.array(k_len).cumsum() - 1
+    k_splits = np.array(k_len).cumsum()
+    k_splits = np.searchsorted(cum_counts, k_splits)
     offsets = [0] + (k_splits[:len(k_splits)-1]+1).tolist()
     return offsets, df.join(wbdf.apply(lambda x: pd.Series(split_dict(x, k_splits))))
 
