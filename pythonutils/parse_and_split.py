@@ -25,38 +25,29 @@ def get_rev(path, index):
     for d in parse(path):
         yield unicode(d[index], 'utf-8')
 
-def exclude(word):
-    if word.isdigit() or word.isspace() or word in string.punctuation:
-        return True
-    else:
-        return False
-
-def get_vocab(word_freqs, threshold):
+def get_vocab(reviews, threshold, nlp, n_threads=4):
     counter = Counter()
-    for wf in word_freqs:
-        counter.update(wf)
-    return [(key,val) for key, val in counter.iteritems() if val > threshold]
-
-def get_word_bags(word_freqs, voc):
-    ret = []
-    voc_pos = {word:ind for ind, word in enumerate(voc)}
-    for wf in word_freqs:
-        ret.append({voc_pos[word]:count for word, count in wf.iteritems() if word in voc})
-    return ret
-    
-    
-def get_word_freq_per_review(reviews, nlp, n_threads=4):
-    ret = []
     doc = nlp.pipe(reviews, n_threads, entity=False, parse=False)
     for review in doc:
-        counter = Counter()
-        words = review.to_array([spacy.attrs.LEMMA, spacy.attrs.IS_ALPHA, spacy.attrs.IS_STOP])
-        for w in words[(words[:,1] == 1) & (words[:,2] == 0)][:,0]:
-            counter[w] += 1
-        ret.append(counter)
+        counter.update(review.count_by(spacy.attrs.LEMMA))
+    return [(key,val) for key, val in counter.iteritems() 
+            if val > threshold and nlp.vocab.strings[key].isalpha() and not spacy.en.English.is_stop(nlp.vocab.strings[key])]
+
+def get_word_bags(reviews, voc, nlp):
+    ret = []
+    voc_pos = {word:ind for ind, word in enumerate(voc)}
+    doc = nlp.pipe(reviews, n_threads=4, entity=False, parse=False)
+    for review in doc:
+        ret.append({voc_pos[word]:count for word, count in review.count_by(spacy.attrs.LEMMA).iteritems() \
+                    if word in voc_pos})
     return ret
+
+def from_test_to_train(train, test, criterion):
+    row = test[criterion].sample(n=1, random_state=np.random.RandomState())
+    train.loc[row.index.item()] = row.iloc[0]
+    test.drop(row.index, inplace=True)
     
-def split_train_test(df, words,frac=0, n=0):
+def split_train_test(df, voc, frac=0, n=0):
     train = df
     if frac != 0:
         test = train.sample(frac=frac, random_state=np.random.RandomState())
@@ -72,13 +63,19 @@ def split_train_test(df, words,frac=0, n=0):
     
     print len(train), len(test)
     for mu in miss_user:
-        row = test[test['reviewerID'] == mu].sample(n=1, random_state=np.random.RandomState())
-        train = train.append(row, verify_integrity = True)
-        test.drop(row.index, inplace=True)
+        from_test_to_train(train, test, test['reviewerID'] == mu)
     for mp in miss_prod:
-        row = test[test['asin'] == mp].sample(n=1, random_state=np.random.RandomState())
-        train = train.append(row, verify_integrity = True)
-        test.drop(row.index, inplace=True)
+        from_test_to_train(train, test, test['asin'] == mp)
+    print len(train), len(test)
+    miss_words = set(range(len(voc)))
+    for wb in train['wordBags']:
+        miss_words -= set(wb)
+        if not miss_words:
+            print "no missing words"
+            return train, test
+    for mw in miss_words:
+        from_test_to_train(train, test, test['wordBags'].map(lambda wb: mw in wb))
+    
     print len(train), len(test)
     return train, test
 

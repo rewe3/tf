@@ -59,45 +59,39 @@ def main():
     parser.add_argument("out", help="Output directory")
 
     args = parser.parse_args()
-
+    
+    # get eng
     start = time.clock()
-
-    # build vocab
     eng = spacy.en.English()
     end = time.clock()
     print "eng", end - start
 
+    # build vocab
     start = time.clock()
-
-    words_freq = get_frequent_words(get_rev(args.data, 'reviewText'), 10, eng)
-    # somehow the empty string is included, mabey empty reviews?
-    words_freq = [(w, count) for w, count in words_freq if w != 0]
-    words, counts = zip(*words_freq)
+    voc, count = zip(*get_vocab(get_rev(args.data, 'reviewText'), 10, eng))
     end = time.clock()
-    print "build vocab done", end - start
+    print "build vocab done in ", end - start
 
+    # get word frequencies per review
     start = time.clock()
-
-    # get word frequency per review
-    bags = get_word_bags(words, get_rev(args.data, 'reviewText'), eng)
-
+    bags = get_word_bags(get_rev(args.data, 'reviewText'), voc, eng)
     end = time.clock()
-    print "word bags done", end - start
+    print "word bags done in ", end - start
+    
     # parse dataframe
-    df = getDF(args.data)
-
-    # delete useless stuff
-    df.drop(['reviewText', 'reviewerName', 'helpful', 'unixReviewTime', 'overall', 'reviewTime', 'summary'], axis=1, inplace=True)
-
-    # put bags into pd df
-    wbdf = pd.DataFrame({'wordBags':bags})
+    start = time.clock()
+    df = getDF(data, 'reviewerID', 'asin')
+    end = time.clock()
+    print "got user/prod in ", end - start
 
     # unique lists
     users = df['reviewerID'].sort_values().unique()
     prods = df['asin'].sort_values().unique()
-
     userkeys = {u: i for i, u in enumerate(users)}
     prodkeys = {p: i for i, p in enumerate(prods)}
+    
+    # put bags into pd df
+    wbdf = pd.DataFrame({'wordBags':bags})
 
     # df used to split in user and prod dimensions
     df_total = pd.concat([df,wbdf], axis=1, join='inner', copy='false')
